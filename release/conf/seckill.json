@@ -1,0 +1,13 @@
+{
+  "log": {
+    "filename":"logs/seckill.log",
+    "separate":"error;info",
+    "level":7,
+    "maxlines":1000000,
+    "maxsize":20971520,
+    "maxdays":1,
+    "daily":true,
+    "color":true
+  }
+}
+
