@@ -2,22 +2,25 @@ package main
 
 import (
 	"fmt"
-	"github.com/astaxie/beego"
 	"github.com/astaxie/beego/logs"
 	"jdseckill/utils"
 	"time"
 )
 
-func CmJdMaotaiProcessor(cookiesId string) error {
+func CmJdMaotaiProcessor(cookiesId string,fastModel bool) error {
 	//TODO 初始化JdUtils
+	logs.Info("UserId:",cookiesId)
+	logs.Info("IsFast:",fastModel)
 	jd := utils.NewJdUtils(cookiesId)
-
 	//TODO 验证是否登录，未登录扫码登录
 	if err := jd.LoginByQCode(); err != nil {
 		logs.Error(err.Error())
 		return err
 	}
-
+	//TODO 删除图片
+	utils.DeleteFile(jd.QrFilePath)
+	//TODO 保存Cookies
+	jd.Release()
 	//TODO 获取用户名称
 	if err := jd.GetUserName(); err != nil {
 		return nil
@@ -34,14 +37,16 @@ func CmJdMaotaiProcessor(cookiesId string) error {
 		logs.Error(err.Error())
 		return err
 	}
-	weChatMessage := fmt.Sprintf(utils.MessageFormat, jd.UserName, jd.BuyTime, jd.SkuName, jd.SkuPrice, "成功", "未开始", "")
-	if utils.AppConfig.MessageEnable {
-		go jd.WeChatSendMessage(weChatMessage)
-	}
+
 	//TODO 预约商品
 	if err := jd.CommodityAppointment(); err != nil {
 		logs.Error(err.Error())
 		return err
+	}
+
+	weChatMessage := fmt.Sprintf(utils.MessageFormat, jd.UserName, jd.BuyTime, jd.SkuName, jd.SkuPrice, "成功", "未开始", "")
+	if utils.AppConfig.MessageEnable {
+		go jd.WeChatSendMessage(weChatMessage)
 	}
 
 	//TODO 定时任务，到达指定时间返回
@@ -60,8 +65,8 @@ func CmJdMaotaiProcessor(cookiesId string) error {
 		return err
 	}
 
-	fastmodel := beego.AppConfig.DefaultBool("fastmodel", false)
-	if !fastmodel {
+
+	if !fastModel {
 		//TODO 访问抢购订单结算页面
 		if err := jd.RequestCheckOut(); err != nil {
 			logs.Error(err.Error())
