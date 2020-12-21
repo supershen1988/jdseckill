@@ -7,11 +7,14 @@ import (
 	"time"
 )
 
-func CmJdMaotaiProcessor(cookiesId string,fastModel bool) error {
+func CmJdMaotaiProcessor(cookiesId string, fastModel bool) error {
 	//TODO 初始化JdUtils
-	logs.Info("UserId:",cookiesId)
-	logs.Info("IsFast:",fastModel)
+	logs.Info("UserId:", cookiesId)
+	logs.Info("IsFast:", fastModel)
 	jd := utils.NewJdUtils(cookiesId)
+	jdTm := jd.GetJdTime()
+	logs.Info("京东时间：", jdTm.Format(utils.TimeFormat))
+	logs.Info("本地时间：", time.Now().Format(utils.TimeFormat))
 	//TODO 验证是否登录，未登录扫码登录
 	if err := jd.LoginByQCode(); err != nil {
 		logs.Error(err.Error())
@@ -64,7 +67,6 @@ func CmJdMaotaiProcessor(cookiesId string,fastModel bool) error {
 		logs.Error(err.Error())
 		return err
 	}
-
 
 	if !fastModel {
 		//TODO 访问抢购订单结算页面

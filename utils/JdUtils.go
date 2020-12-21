@@ -198,6 +198,53 @@ func (jd *JdUtils) AllowRedirects(req *httplib.BeegoHTTPRequest) {
 	})
 }
 
+func (jd *JdUtils) GetJdTime() time.Time {
+	url := "https://a.jd.com//ajax/queryServerData.html"
+	req := httplib.Get(url)
+	DefaultHeaders["User-Agent"] = AppConfig.UserAgent
+	resp, err := req.Response()
+	if err != nil {
+		logs.Error("获取京东时间异常: %", AppConfig.SkuId, err)
+		return time.Now()
+	}
+	if resp.StatusCode == http.StatusOK {
+		respMsg, err := req.String()
+		if err != nil {
+			logs.Error("获取京东时间,请求数据异常: ", err)
+			return time.Now()
+		}
+		Json, err := ToJSON(respMsg)
+		if err != nil {
+			logs.Error("解析Json响应数据失败: %s ", err)
+			return time.Now()
+		}
+		jdunixTimes, err := Json.Get("serverTime").Int64()
+		if err != nil {
+			logs.Error("获取京东时间失败: %", err)
+			return time.Now()
+		}
+
+		jdTimeStr := strconv.FormatInt(jdunixTimes, 10)
+		sec := jdTimeStr[0:10]
+		nsec := jdTimeStr[10:] + "000000"
+		unixSec, err := strconv.ParseInt(sec, 10, 64)
+		if err != nil {
+			logs.Error("时间转换异常: %", err)
+			return time.Now()
+		}
+		unixNsec, err := strconv.ParseInt(nsec, 10, 64)
+		if err != nil {
+			logs.Error("时间转换异常: %", err)
+			return time.Now()
+		}
+		return time.Unix(unixSec, unixNsec)
+	} else {
+		logs.Error("获取京东时间失败: %", err)
+		err = fmt.Errorf("%+v", resp.Status)
+		return time.Now()
+	}
+}
+
 /*==================================================Login==============================================================*/
 func (jd *JdUtils) LoginByQCode() error {
 	if AppConfig.ValidateCookies {
@@ -227,16 +274,16 @@ func (jd *JdUtils) LoginByQCode() error {
 		return err
 	}
 
-	isScanImg:=false
+	isScanImg := false
 	for retry := 85; retry != 0; retry-- {
 		err := jd.WaitForScan()
 		if err == nil {
-			isScanImg=true
+			isScanImg = true
 			break
 		}
 	}
 
-	if !isScanImg{
+	if !isScanImg {
 		return fmt.Errorf("二维码过期，请重新获取扫描")
 	}
 
@@ -671,7 +718,7 @@ func (jd *JdUtils) SubmitOrder() error {
 		logs.Error("生成提交抢购订单所需参数异常：", err)
 		return err
 	}
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 200; i++ {
 		go logs.Info("开始提交抢购订单【%d】次...", i)
 		url := "https://marathon.jd.com/seckillnew/orderService/pc/submitOrder.action"
 		skillUrl := fmt.Sprintf("https://marathon.jd.com/seckill/seckill.action?skuId=%s&num=%s&rid=%s", AppConfig.SkuId, strconv.FormatInt(AppConfig.CheckOutNumber, 10), strconv.FormatInt(time.Now().Unix()*1000, 10))
@@ -853,10 +900,10 @@ func (jd *JdUtils) CommodityAppointment() error {
 			logs.Error(0, "解析预约状态页面失败: %+v", err)
 			return err
 		}
-		reservation:=strings.Trim(doc.Find("p.bd-right-result").Text(), " \t\n")
+		reservation := strings.Trim(doc.Find("p.bd-right-result").Text(), " \t\n")
 		logs.Info(reservation)
 		reservationStatus := strings.Contains(reservation, "预约失败")
-		if reservationStatus{
+		if reservationStatus {
 			return fmt.Errorf(reservation)
 		}
 		return nil
@@ -907,15 +954,14 @@ func (jd *JdUtils) GetReservationUrlUrl() (string, error) {
 /*================================================TaskCorn=============================================================*/
 func (jd *JdUtils) TaskCorn() error {
 	logs.Info("正在等待到达设定时间:", jd.BuyTime.String())
+	if time.Now().Sub(jd.BuyTime).Minutes() > AppConfig.StopMinutes {
+		message := fmt.Sprintf("抢购时间以过【%f】分钟，自动停止...", AppConfig.StopMinutes)
+		logs.Info(message)
+		return fmt.Errorf(message)
+	}
 	for {
-		nowTime := time.Now()
-		if nowTime.Sub(jd.BuyTime).Minutes() > AppConfig.StopMinutes {
-			message := fmt.Sprintf("抢购时间以过【%f】分钟，自动停止...", AppConfig.StopMinutes)
-			logs.Info(message)
-			return fmt.Errorf(message)
-		}
-		if nowTime.Before(jd.BuyTime) {
-			time.Sleep(time.Duration(10) * time.Microsecond)
+		if time.Now().Before(jd.BuyTime) || jd.GetJdTime().Before(jd.BuyTime) {
+			time.Sleep(time.Duration(10) * time.Nanosecond)
 		} else {
 			logs.Info("时间到达，开始执行……")
 			return nil
