@@ -1,6 +1,6 @@
 {
   "log": {
-    "filename":"logs/seckill.log",
+    "filename":"",
     "separate":"error;info",
     "level":7,
     "maxlines":1000000,

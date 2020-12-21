@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"jdseckill/model"
+	"math/rand"
 	"time"
 
 	"github.com/astaxie/beego"
@@ -15,7 +16,7 @@ var (
 	AppConfig model.AppConfig
 )
 
-func InitAppConfigByJson(configPath string) {
+func InitAppConfigByJson(configPath, cookiesId string) {
 	cdata, err := ioutil.ReadFile(configPath)
 	if err != nil {
 		logs.Error("read config file ["+configPath+"] err: ", err)
@@ -28,6 +29,7 @@ func InitAppConfigByJson(configPath string) {
 	}
 
 	logConf := make(map[string]interface{})
+	AppConfig.LoggerConfigInfo.LogFileName = fmt.Sprintf("logs/%s.log", cookiesId)
 	mapJsonBytes, err := json.Marshal(AppConfig.LoggerConfigInfo)
 	json.Unmarshal(mapJsonBytes, &logConf)
 	logJsonBytes, err := json.Marshal(logConf)
@@ -53,8 +55,11 @@ func InitAppConfigByJson(configPath string) {
 	submitOrderNumber := beego.AppConfig.DefaultInt64("SubmitOrderNumber", 1)
 	orderInfoNumber := beego.AppConfig.DefaultInt64("OrderInfoNumber", 1)
 	stopMinutes := beego.AppConfig.DefaultFloat("StopMinutes", 5)
-
 	dayStr := time.Now().Format(DayFormat)
+	if randomUseragent {
+		rand.Seed(time.Now().Unix())
+		userAgent = UserAgents[rand.Intn(len(UserAgents))]
+	}
 	AppConfig.Eid = eid
 	AppConfig.Fp = fp
 	AppConfig.SkuId = skuId

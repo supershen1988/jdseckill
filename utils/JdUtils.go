@@ -4,13 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"jdseckill/utils/httplib"
 	"math/rand"
-	"mime"
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -31,15 +30,7 @@ var (
 		"Accept-Encoding": "gzip, deflate",
 		"Accept-Language": "zh-CN,zh;q=0.8",
 	}
-	URLForQR = [...]string{
-		"https://passport.jd.com/new/login.aspx",
-		"https://qr.m.jd.com/show",
-		"https://qr.m.jd.com/check",
-		"https://passport.jd.com/uc/qrCodeTicketValidation",
-		"https://order.jd.com/center/list.action",
-		"https://passport.jd.com/user/petName/getUserInfoForMiniJd.action",
-		"http://p.3.cn/prices/mgets",
-	}
+
 	TimeFormat = "2006-01-02 15:04:05.000000000"
 	DayFormat  = "2006-01-02"
 )
@@ -58,11 +49,15 @@ type JdUtils struct {
 	IsSleep     bool
 	BuyTime     time.Time
 	Jar         *SimpleJar
+	CookiesId   string
 }
 
-func NewJdUtils(cookieFileName, qrCodeFile string) *JdUtils {
+func NewJdUtils(cookiesId string) *JdUtils {
 	// make the folder to contain the resulting archive
 	// if it does not already exist
+	dir, _ := os.Getwd()
+	cookieFileName := path.Join(dir, "cookies", cookiesId+".cookies")
+	qrCodeFile := path.Join(dir, "images", cookiesId+".qr")
 	destDir := filepath.Dir(cookieFileName)
 	if !fileExists(destDir) {
 		err := mkdir(destDir, 0755)
@@ -79,7 +74,7 @@ func NewJdUtils(cookieFileName, qrCodeFile string) *JdUtils {
 		}
 	}
 
-	jd := &JdUtils{QrFilePath: qrCodeFile, CookiesFile: cookieFileName}
+	jd := &JdUtils{QrFilePath: qrCodeFile, CookiesFile: cookieFileName, CookiesId: cookiesId}
 	jd.Jar = NewSimpleJar(JarOption{
 		JarType:  JarJson,
 		Filename: cookieFileName,
@@ -135,9 +130,13 @@ func (jd *JdUtils) RunCommand(command string) error {
 	return nil
 }
 
-func (jd *JdUtils) ToJSON(respMsg string) (*simplejson.Json, error) {
+func ToJSON(respMsg string) (*simplejson.Json, error) {
 	jsonStr := strings.ReplaceAll(respMsg, "\n", "")
 	jsonStr = strings.TrimSpace(jsonStr)
+	if jsonStr == "" || jsonStr == "null" {
+		return nil, fmt.Errorf("原始字符串%s不是Json格式，处理后字符串%s ", respMsg, jsonStr)
+	}
+
 	buffer := []byte(jsonStr)
 	validJson := json.Valid(buffer)
 	if validJson {
@@ -195,12 +194,18 @@ func (jd *JdUtils) SaveCookies() error {
 	return nil
 }
 
+func (jd *JdUtils) AllowRedirects(req *httplib.BeegoHTTPRequest) {
+	req.SetCheckRedirect(func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	})
+}
+
 /*==================================================Login==============================================================*/
 func (jd *JdUtils) LoginByQCode() error {
 	defer jd.Release()
 	if AppConfig.ValidateCookies {
 		logs.Info("开始验证Cookies 登录...")
-		if jd.ValidateLogin(URLForQR[4]) {
+		if jd.ValidateLogin() {
 			return nil
 		} else {
 			jd.Jar.Clean()
@@ -210,11 +215,11 @@ func (jd *JdUtils) LoginByQCode() error {
 	}
 
 	logs.Info("开始扫码登录...")
-	if err := jd.LoginPage(URLForQR[0]); err != nil {
+	if err := jd.LoginPage(); err != nil {
 		return err
 	}
 
-	if err := jd.LoadQRCode(URLForQR[1]); err != nil {
+	if err := jd.LoadQRCode(); err != nil {
 		return err
 	}
 
@@ -226,49 +231,43 @@ func (jd *JdUtils) LoginByQCode() error {
 	}
 
 	for retry := 85; retry != 0; retry-- {
-		err := jd.WaitForScan(URLForQR[2])
+		err := jd.WaitForScan()
 		if err == nil {
 			break
 		}
 	}
 
-	if err := jd.ValidateQRToken(URLForQR[3]); err != nil {
-		return err
-	}
-
-	if err := jd.GetUserName(URLForQR[5]); err != nil {
+	if err := jd.ValidateQRToken(); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (jd *JdUtils) ValidateLogin(url string) bool {
+//https://order.jd.com/lazy/isPlusMember.action
+func (jd *JdUtils) ValidateLogin() bool {
+	url := "https://order.jd.com/center/list.action"
 	req := httplib.Get(url)
 	req.SetEnableCookie(true)
 	req.Param("rid", strconv.FormatInt(time.Now().Unix()*1000, 10))
 	DefaultHeaders["User-Agent"] = AppConfig.UserAgent
 	jd.CustomHeader(req.GetRequest(), DefaultHeaders)
+	jd.AllowRedirects(req)
 	resp, err := req.Response()
 	if err != nil {
 		logs.Info("需要重新登录: %+v", err)
 		return false
 	}
+
 	if resp.StatusCode != http.StatusOK {
 		logs.Info("需要重新登录")
 		return false
 	}
-
-	err = jd.GetUserName(URLForQR[5])
-	if err != nil {
-		logs.Error(err.Error())
-	} else {
-		logs.Info("Coolies登录成功，无需重新登录")
-		return true
-	}
-	return false
+	logs.Info("Coolies登录成功，无需重新登录")
+	return true
 }
 
-func (jd *JdUtils) LoginPage(url string) error {
+func (jd *JdUtils) LoginPage() error {
+	url := "https://passport.jd.com/new/login.aspx"
 	req := httplib.Get(url)
 	req.SetEnableCookie(true)
 	DefaultHeaders["User-Agent"] = AppConfig.UserAgent
@@ -281,7 +280,8 @@ func (jd *JdUtils) LoginPage(url string) error {
 	return nil
 }
 
-func (jd *JdUtils) LoadQRCode(url string) error {
+func (jd *JdUtils) LoadQRCode() error {
+	url := "https://qr.m.jd.com/show"
 	req := httplib.Get(url)
 	req.SetEnableCookie(true)
 	req.Param("appid", strconv.Itoa(133))
@@ -289,7 +289,7 @@ func (jd *JdUtils) LoadQRCode(url string) error {
 	req.Param("t", strconv.FormatInt(time.Now().Unix()*1000, 10))
 	DefaultHeaders["User-Agent"] = AppConfig.UserAgent
 	jd.CustomHeader(req.GetRequest(), DefaultHeaders)
-	req.Header("Referer", URLForQR[0])
+	req.Header("Referer", "https://passport.jd.com/new/login.aspx")
 	resp, err := req.Response()
 	if err != nil {
 		logs.Error("加载登录二维码请求异常:", err)
@@ -301,15 +301,9 @@ func (jd *JdUtils) LoadQRCode(url string) error {
 		err = fmt.Errorf("加载登录二维码异常 http status : %d/%s", resp.StatusCode, resp.Status)
 		return err
 	}
-	defer resp.Body.Close()
 	filename := jd.QrFilePath + ".png"
-	mt, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
-	if typ, e := mime.ExtensionsByType(mt); e == nil {
-		filename = jd.QrFilePath + typ[0]
-	}
-	file, _ := os.Create(filename)
-	defer file.Close()
-	if _, err = io.Copy(file, resp.Body); err != nil {
+	err = req.ToFile(filename)
+	if err != nil {
 		logs.Error("下载二维码失败: %+v", err)
 		return err
 	}
@@ -317,19 +311,19 @@ func (jd *JdUtils) LoadQRCode(url string) error {
 	return nil
 }
 
-func (jd *JdUtils) WaitForScan(url string) error {
+func (jd *JdUtils) WaitForScan() error {
+	url := "https://qr.m.jd.com/check"
 	req := httplib.Get(url)
 	req.SetEnableCookie(true)
-	cookies := jd.Jar.Get("wlfstk_smdl")
 	rand.Seed(time.Now().UnixNano())
 	randomNumber := rand.Intn(9999999) + 1000000
 	req.Param("callback", fmt.Sprintf("jQuery%d", randomNumber))
 	req.Param("appid", strconv.Itoa(133))
-	req.Param("token", cookies)
+	req.Param("token", jd.Jar.Get("wlfstk_smdl"))
 	req.Param("_", strconv.FormatInt(time.Now().Unix()*1000, 10))
 	DefaultHeaders["User-Agent"] = AppConfig.UserAgent
 	jd.CustomHeader(req.GetRequest(), DefaultHeaders)
-	req.Header("Referer", URLForQR[0])
+	req.Header("Referer", "https://passport.jd.com/new/login.aspx")
 	req.SetHost("qr.m.jd.com")
 
 	resp, err := req.Response()
@@ -344,7 +338,7 @@ func (jd *JdUtils) WaitForScan(url string) error {
 			return err
 		}
 
-		Json, err := jd.ToJSON(respMsg)
+		Json, err := ToJSON(respMsg)
 		if err != nil {
 			logs.Error("解析Json响应数据失败: %s ", err)
 			return err
@@ -367,7 +361,8 @@ func (jd *JdUtils) WaitForScan(url string) error {
 	return nil
 }
 
-func (jd *JdUtils) ValidateQRToken(url string) error {
+func (jd *JdUtils) ValidateQRToken() error {
+	url := "https://passport.jd.com/uc/qrCodeTicketValidation"
 	req := httplib.Get(url)
 	req.SetEnableCookie(true)
 	req.Header("Referer", "https://passport.jd.com/uc/login?ltype=logout")
@@ -408,7 +403,7 @@ func (jd *JdUtils) ValidateQRToken(url string) error {
 			logs.Error("获取扫码验证Token,请求数据异常: ", err)
 			return err
 		}
-		Json, err := jd.ToJSON(respMsg)
+		Json, err := ToJSON(respMsg)
 		if err != nil {
 			logs.Error("解析Json响应数据失败: %s ", err)
 			return err
@@ -429,16 +424,17 @@ func (jd *JdUtils) ValidateQRToken(url string) error {
 	}
 }
 
-func (jd *JdUtils) GetUserName(url string) error {
+func (jd *JdUtils) GetUserName() error {
+	url := "https://passport.jd.com/user/petName/getUserInfoForMiniJd.action"
 	req := httplib.Get(url)
 	req.SetEnableCookie(true)
-	req.Header("Referer", "https://order.jd.com/center/list.action")
 	rand.Seed(time.Now().UnixNano())
 	randomNumber := rand.Intn(9999999) + 1000000
 	req.Param("callback", fmt.Sprintf("jQuery%d", randomNumber))
 	req.Param("_", strconv.FormatInt(time.Now().Unix()*1000, 10))
 	DefaultHeaders["User-Agent"] = AppConfig.UserAgent
 	jd.CustomHeader(req.GetRequest(), DefaultHeaders)
+	req.Header("Referer", "https://order.jd.com/center/list.action")
 	resp, err := req.Response()
 	if err != nil {
 		logs.Error("获取用户名请求异常: ", err)
@@ -450,9 +446,8 @@ func (jd *JdUtils) GetUserName(url string) error {
 			logs.Error("获取用户名,请求数据异常: ", err)
 			return err
 		}
-		Json, err := jd.ToJSON(respMsg)
+		Json, err := ToJSON(respMsg)
 		if err != nil {
-			logs.Error("解析Json响应数据失败: %s ", err)
 			return err
 		}
 		jd.UserName = Json.Get("nickName").MustString("jd")
@@ -502,7 +497,8 @@ func (jd *JdUtils) GetSkuTitle() error {
 }
 
 func (jd *JdUtils) GetPrice() error {
-	req := httplib.Get(URLForQR[6])
+	url := "http://p.3.cn/prices/mgets"
+	req := httplib.Get(url)
 	req.SetEnableCookie(true)
 	req.Param("type", "1")
 	req.Param("skuIds", "J_"+AppConfig.SkuId)
@@ -521,7 +517,7 @@ func (jd *JdUtils) GetPrice() error {
 			logs.Error("获取商品价格,请求数据异常: ", err)
 			return err
 		}
-		Json, err := jd.ToJSON(respMsg)
+		Json, err := ToJSON(respMsg)
 		if err != nil {
 			logs.Error("解析Json响应数据失败: %s ", err)
 			return err
@@ -566,7 +562,7 @@ func (jd *JdUtils) ResponseJdHome() error {
 }
 
 /*==================================================Seckill============================================================*/
-func (jd *JdUtils) ResponseSeckill() error {
+func (jd *JdUtils) RequestSeckill() error {
 	logs.Info("访问商品的抢购连接...")
 	skuUrl := fmt.Sprintf("https://item.jd.com/%s.html", AppConfig.SkuId)
 	url := jd.GetSeckillUrl()
@@ -576,12 +572,14 @@ func (jd *JdUtils) ResponseSeckill() error {
 	jd.CustomHeader(req.GetRequest(), DefaultHeaders)
 	req.Header("Referer", skuUrl)
 	req.SetHost("marathon.jd.com")
+	jd.AllowRedirects(req)
 	resp, err := req.Response()
 	if err != nil {
 		logs.Error("访问商品的抢购链接请求异常: ", err)
 		return err
 	}
-	if resp.StatusCode == http.StatusOK {
+
+	if resp.StatusCode == http.StatusFound {
 		logs.Info("访问商品的抢购链接OK")
 		return nil
 	} else {
@@ -627,7 +625,7 @@ func (jd *JdUtils) GetSeckillUrl() string {
 				}
 				continue
 			}
-			Json, err := jd.ToJSON(respMsg)
+			Json, err := ToJSON(respMsg)
 			if err != nil {
 				logs.Error("解析Json响应数据失败: %s ", err)
 				if jd.IsSleep {
@@ -658,7 +656,7 @@ func (jd *JdUtils) GetSeckillUrl() string {
 	}
 }
 
-func (jd *JdUtils) ResponseCheckOut() error {
+func (jd *JdUtils) RequestCheckOut() error {
 	logs.Info("访问抢购订单结算页面...")
 	skuUrl := fmt.Sprintf("https://item.jd.com/%s.html", AppConfig.SkuId)
 	url := "https://marathon.jd.com/seckill/seckill.action"
@@ -671,12 +669,13 @@ func (jd *JdUtils) ResponseCheckOut() error {
 	jd.CustomHeader(req.GetRequest(), DefaultHeaders)
 	req.Header("Referer", skuUrl)
 	req.SetHost("marathon.jd.com")
+	jd.AllowRedirects(req)
 	resp, err := req.Response()
 	if err != nil {
 		logs.Error("访问抢购订单结算页面请求异常: ", err)
 		return err
 	}
-	if resp.StatusCode == http.StatusOK {
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusFound {
 		logs.Info("访问抢购订单结算页链接OK")
 		return nil
 	} else {
@@ -717,7 +716,7 @@ func (jd *JdUtils) SubmitOrder() error {
 				}
 				continue
 			}
-			Json, err := jd.ToJSON(respMsg)
+			Json, err := ToJSON(respMsg)
 			if err != nil {
 				logs.Error("解析Json响应数据失败: %s ", err)
 				continue
@@ -798,17 +797,16 @@ func (jd *JdUtils) GetOrderData() (map[string]interface{}, error) {
 
 func (jd *JdUtils) GetOrderInitData() (*simplejson.Json, error) {
 	logs.Info("获取秒杀初始化信息（包括：地址，发票，token）")
-	for i := 0; i < 20; i++ {
-		logs.Info("获取秒杀初始化信息:【%d】次...", i)
-		url := "https://marathon.jd.com/seckillnew/orderService/pc/init.action"
-		req := httplib.Get(url)
-		req.SetEnableCookie(true)
-		req.Param("sku", AppConfig.SkuId)
-		req.Param("num", strconv.FormatInt(AppConfig.OrderInfoNumber, 10))
-		req.Param("isModifyAddress", "false")
-		DefaultHeaders["User-Agent"] = AppConfig.UserAgent
-		jd.CustomHeader(req.GetRequest(), DefaultHeaders)
-		req.SetHost("marathon.jd.com")
+	url := "https://marathon.jd.com/seckillnew/orderService/pc/init.action"
+	req := httplib.Get(url)
+	req.SetEnableCookie(true)
+	req.Param("sku", AppConfig.SkuId)
+	req.Param("num", strconv.FormatInt(AppConfig.OrderInfoNumber, 10))
+	req.Param("isModifyAddress", "false")
+	DefaultHeaders["User-Agent"] = AppConfig.UserAgent
+	jd.CustomHeader(req.GetRequest(), DefaultHeaders)
+	req.SetHost("marathon.jd.com")
+	for i := 0; i < 100; i++ {
 		resp, err := req.Response()
 		if err != nil {
 			logs.Error("获取秒杀初始化信息请求异常: ", err)
@@ -827,7 +825,7 @@ func (jd *JdUtils) GetOrderInitData() (*simplejson.Json, error) {
 				continue
 			}
 
-			Json, err := jd.ToJSON(respMsg)
+			Json, err := ToJSON(respMsg)
 			if err != nil {
 				logs.Error("解析Json响应数据失败: %s ", err)
 				if jd.IsSleep {
@@ -896,7 +894,7 @@ func (jd *JdUtils) GetReservationUrlUrl() (string, error) {
 			logs.Error("获取预约商品链接,请求数据异常: ", err)
 			return "", err
 		}
-		Json, err := jd.ToJSON(respMsg)
+		Json, err := ToJSON(respMsg)
 		if err != nil {
 			logs.Error("解析Json响应数据失败: %s ", err)
 			return "", err

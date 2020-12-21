@@ -2,38 +2,45 @@ package main
 
 import (
 	"fmt"
+	"github.com/astaxie/beego"
 	"github.com/astaxie/beego/logs"
 	"jdseckill/utils"
-	"os"
-	"path"
 	"time"
 )
 
-func CmJdMaotaiProcessor(cookiesId string) error{
-	dir, _ := os.Getwd()
-	cookieFileName := path.Join(dir, "cookies", cookiesId+".cookies")
-	qrCodeFile := path.Join(dir, "images", cookiesId+".qr")
+func CmJdMaotaiProcessor(cookiesId string) error {
 	//TODO 初始化JdUtils
-	jd := utils.NewJdUtils(cookieFileName, qrCodeFile)
+	jd := utils.NewJdUtils(cookiesId)
+
 	//TODO 验证是否登录，未登录扫码登录
 	if err := jd.LoginByQCode(); err != nil {
+		logs.Error(err.Error())
 		return err
 	}
+
+	//TODO 获取用户名称
+	if err := jd.GetUserName(); err != nil {
+		return nil
+	}
+
 	//TODO 获取商品名称
 	if err := jd.GetSkuTitle(); err != nil {
+		logs.Error(err.Error())
 		return err
 	}
 
 	//TODO 获取商品价格
 	if err := jd.GetPrice(); err != nil {
+		logs.Error(err.Error())
 		return err
 	}
-	weChatMessage := fmt.Sprintf(utils.MessageFormat, jd.UserName, jd.BuyTime, jd.SkuName, jd.SkuPrice, "成功", "未开始","")
+	weChatMessage := fmt.Sprintf(utils.MessageFormat, jd.UserName, jd.BuyTime, jd.SkuName, jd.SkuPrice, "成功", "未开始", "")
 	if utils.AppConfig.MessageEnable {
 		go jd.WeChatSendMessage(weChatMessage)
 	}
 	//TODO 预约商品
 	if err := jd.CommodityAppointment(); err != nil {
+		logs.Error(err.Error())
 		return err
 	}
 
@@ -42,19 +49,24 @@ func CmJdMaotaiProcessor(cookiesId string) error{
 		return err
 	}
 
-	weChatMessage = fmt.Sprintf(utils.MessageFormat, jd.UserName, jd.BuyTime, jd.SkuName, jd.SkuPrice, "成功", "开始抢购","")
+	weChatMessage = fmt.Sprintf(utils.MessageFormat, jd.UserName, jd.BuyTime, jd.SkuName, jd.SkuPrice, "成功", "开始抢购", "")
 	if utils.AppConfig.MessageEnable {
 		go jd.WeChatSendMessage(weChatMessage)
 	}
 
 	//TODO 访问商品的抢购链接
-	if err := jd.ResponseSeckill(); err != nil {
+	if err := jd.RequestSeckill(); err != nil {
+		logs.Error(err.Error())
 		return err
 	}
 
-	//TODO 访问抢购订单结算页面
-	if err := jd.ResponseCheckOut(); err != nil {
-		return err
+	fastmodel := beego.AppConfig.DefaultBool("fastmodel", false)
+	if !fastmodel {
+		//TODO 访问抢购订单结算页面
+		if err := jd.RequestCheckOut(); err != nil {
+			logs.Error(err.Error())
+			return err
+		}
 	}
 
 	for {
@@ -65,7 +77,7 @@ func CmJdMaotaiProcessor(cookiesId string) error{
 		nowTime := time.Now()
 		if nowTime.Sub(jd.BuyTime).Minutes() > utils.AppConfig.StopMinutes {
 			logs.Info("抢购时间以过【%f】分钟，自动停止...", utils.AppConfig.StopMinutes)
-			weChatMessage = fmt.Sprintf(utils.MessageFormat, jd.UserName, jd.BuyTime, jd.SkuName, jd.SkuPrice, "成功", "抢购失败","")
+			weChatMessage = fmt.Sprintf(utils.MessageFormat, jd.UserName, jd.BuyTime, jd.SkuName, jd.SkuPrice, "成功", "抢购失败", "")
 			if utils.AppConfig.MessageEnable {
 				go jd.WeChatSendMessage(weChatMessage)
 			}
