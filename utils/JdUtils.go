@@ -171,8 +171,6 @@ func ToJSON(respMsg string) (*simplejson.Json, error) {
 func (jd *JdUtils) Release() {
 	//TODO 是否保存Cookies
 	jd.SaveCookies()
-	//TODO 删除图片
-	DeleteFile(jd.QrFilePath)
 }
 
 // Release the resource opened
@@ -202,7 +200,6 @@ func (jd *JdUtils) AllowRedirects(req *httplib.BeegoHTTPRequest) {
 
 /*==================================================Login==============================================================*/
 func (jd *JdUtils) LoginByQCode() error {
-	defer jd.Release()
 	if AppConfig.ValidateCookies {
 		logs.Info("开始验证Cookies 登录...")
 		if jd.ValidateLogin() {
@@ -230,11 +227,17 @@ func (jd *JdUtils) LoginByQCode() error {
 		return err
 	}
 
+	isScanImg:=false
 	for retry := 85; retry != 0; retry-- {
 		err := jd.WaitForScan()
 		if err == nil {
+			isScanImg=true
 			break
 		}
+	}
+
+	if !isScanImg{
+		return fmt.Errorf("二维码过期，请重新获取扫描")
 	}
 
 	if err := jd.ValidateQRToken(); err != nil {
@@ -254,12 +257,10 @@ func (jd *JdUtils) ValidateLogin() bool {
 	jd.AllowRedirects(req)
 	resp, err := req.Response()
 	if err != nil {
-		logs.Info("需要重新登录: %+v", err)
 		return false
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		logs.Info("需要重新登录")
 		return false
 	}
 	logs.Info("Coolies登录成功，无需重新登录")
@@ -413,7 +414,7 @@ func (jd *JdUtils) ValidateQRToken() error {
 			logs.Info("扫码登陆成功, P3P: %s", resp.Header.Get("P3P"))
 			return nil
 		} else {
-			err = fmt.Errorf("%+v : %s", code, Json.Get("msg").MustString())
+			err = fmt.Errorf("登陆失败 %+v : %s", code, Json.Get("msg").MustString())
 			logs.Error(err.Error())
 			return err
 		}
@@ -537,30 +538,6 @@ func (jd *JdUtils) GetPrice() error {
 	}
 }
 
-func (jd *JdUtils) ResponseJdHome() error {
-	logs.Info("访问Jd主页...")
-	url := "https://www.jd.com"
-	req := httplib.Get(url)
-	req.SetEnableCookie(true)
-	DefaultHeaders["User-Agent"] = AppConfig.UserAgent
-	jd.CustomHeader(req.GetRequest(), DefaultHeaders)
-	req.Header("Referer", "https://passport.jd.com")
-	req.SetHost("www.jd.com")
-	resp, err := req.Response()
-	if err != nil {
-		logs.Error("访问Jd主页请求异常: ", err)
-		return err
-	}
-	if resp.StatusCode == http.StatusOK {
-		logs.Info("访问Jd主页链接OK")
-		return nil
-	} else {
-		err := fmt.Errorf("访问Jd主页链接失败StatusCode: %d", resp.StatusCode)
-		logs.Error(err.Error())
-		return err
-	}
-}
-
 /*==================================================Seckill============================================================*/
 func (jd *JdUtils) RequestSeckill() error {
 	logs.Info("访问商品的抢购连接...")
@@ -675,14 +652,17 @@ func (jd *JdUtils) RequestCheckOut() error {
 		logs.Error("访问抢购订单结算页面请求异常: ", err)
 		return err
 	}
-	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusFound {
-		logs.Info("访问抢购订单结算页链接OK")
-		return nil
-	} else {
-		err := fmt.Errorf("访问抢购订单结算失败StatusCode: %d", resp.StatusCode)
-		logs.Error(err.Error())
-		return err
-	}
+	logs.Info("访问抢购订单结算页面,StatusCode: %d", resp.StatusCode)
+	return nil
+
+	//if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusFound {
+	//	logs.Info("访问抢购订单结算页链接OK")
+	//	return nil
+	//} else {
+	//	err := fmt.Errorf("访问抢购订单结算页面,StatusCode: %d", resp.StatusCode)
+	//	logs.Error(err.Error())
+	//	return err
+	//}
 }
 
 func (jd *JdUtils) SubmitOrder() error {
@@ -863,7 +843,22 @@ func (jd *JdUtils) CommodityAppointment() error {
 		return err
 	}
 	if resp.StatusCode == http.StatusOK {
-		logs.Info("预约成功，已获得抢购资格 / 您已成功预约过了，无需重复预约")
+		respMsg, err := req.Bytes()
+		if err != nil {
+			logs.Error("获取预约状态异常: ", err)
+			return err
+		}
+		doc, err := goquery.NewDocumentFromReader(bytes.NewBuffer(respMsg))
+		if err != nil {
+			logs.Error(0, "解析预约状态页面失败: %+v", err)
+			return err
+		}
+		reservation:=strings.Trim(doc.Find("p.bd-right-result").Text(), " \t\n")
+		logs.Info(reservation)
+		reservationStatus := strings.Contains(reservation, "预约失败")
+		if reservationStatus{
+			return fmt.Errorf(reservation)
+		}
 		return nil
 	} else {
 		err := fmt.Errorf("预约商品失败,StatusCode: %d", resp.StatusCode)
