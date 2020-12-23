@@ -42,10 +42,7 @@ func CmJdMaotaiProcessor(cookiesId string, fastModel bool) error {
 	}
 
 	//TODO 预约商品
-	if err := jd.CommodityAppointment(); err != nil {
-		logs.Error(err.Error())
-		return err
-	}
+	jd.CommodityAppointment()
 
 	weChatMessage := fmt.Sprintf(utils.MessageFormat, jd.UserName, jd.BuyTime, jd.SkuName, jd.SkuPrice, "成功", "未开始", "")
 	if utils.AppConfig.MessageEnable {
@@ -79,16 +76,16 @@ func CmJdMaotaiProcessor(cookiesId string, fastModel bool) error {
 	for {
 		//TODO 开始提交订单
 		if err := jd.SubmitOrder(); err == nil {
-			return err
+			return nil
 		}
 		nowTime := time.Now()
-		if nowTime.Sub(jd.BuyTime).Minutes() > utils.AppConfig.StopMinutes {
-			logs.Info("抢购时间以过【%f】分钟，自动停止...", utils.AppConfig.StopMinutes)
+		if nowTime.Sub(jd.BuyTime).Seconds() > utils.AppConfig.StopSeconds {
+			logs.Info("抢购时间以过【%f】分钟，自动停止...", utils.AppConfig.StopSeconds)
 			weChatMessage = fmt.Sprintf(utils.MessageFormat, jd.UserName, jd.BuyTime, jd.SkuName, jd.SkuPrice, "成功", "抢购失败", "")
 			if utils.AppConfig.MessageEnable {
 				go jd.WeChatSendMessage(weChatMessage)
 			}
-			return nil
+			return fmt.Errorf("抢购时间以过【%f】分钟，自动停止...", utils.AppConfig.StopSeconds)
 		}
 	}
 }

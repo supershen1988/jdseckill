@@ -54,7 +54,10 @@ func InitAppConfigByJson(configPath, cookiesId string) {
 	checkOutNumber := beego.AppConfig.DefaultInt64("CheckOutNumber", 2)
 	submitOrderNumber := beego.AppConfig.DefaultInt64("SubmitOrderNumber", 1)
 	orderInfoNumber := beego.AppConfig.DefaultInt64("OrderInfoNumber", 1)
-	stopMinutes := beego.AppConfig.DefaultFloat("StopMinutes", 5)
+	stopSeconds := beego.AppConfig.DefaultFloat("StopSeconds", 30)
+	isFast := beego.AppConfig.DefaultBool("IsFast", false)
+	isSleep := beego.AppConfig.DefaultBool("IsSleep", false)
+	sleepMillisecond := beego.AppConfig.DefaultInt64("SleepMillisecond", 100)
 	dayStr := time.Now().Format(DayFormat)
 	if randomUseragent {
 		rand.Seed(time.Now().Unix())
@@ -72,5 +75,8 @@ func InitAppConfigByJson(configPath, cookiesId string) {
 	AppConfig.CheckOutNumber = checkOutNumber
 	AppConfig.SubmitOrderNumber = submitOrderNumber
 	AppConfig.OrderInfoNumber = orderInfoNumber
-	AppConfig.StopMinutes = stopMinutes
+	AppConfig.StopSeconds = stopSeconds
+	AppConfig.IsSleep = isSleep
+	AppConfig.IsFast = isFast
+	AppConfig.SleepMillisecond = sleepMillisecond
 }

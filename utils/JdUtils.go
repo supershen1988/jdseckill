@@ -40,16 +40,17 @@ var (
 )
 
 type JdUtils struct {
-	QrFilePath  string
-	CookiesFile string
-	Token       string
-	UserName    string
-	SkuName     string
-	SkuPrice    string
-	IsSleep     bool
-	BuyTime     time.Time
-	Jar         *SimpleJar
-	CookiesId   string
+	QrFilePath       string
+	CookiesFile      string
+	Token            string
+	UserName         string
+	SkuName          string
+	SkuPrice         string
+	IsSleep          bool
+	BuyTime          time.Time
+	Jar              *SimpleJar
+	CookiesId        string
+	SleepMillisecond int64
 }
 
 func NewJdUtils(cookiesId string) *JdUtils {
@@ -79,7 +80,8 @@ func NewJdUtils(cookiesId string) *JdUtils {
 		JarType:  JarJson,
 		Filename: cookieFileName,
 	})
-
+	jd.IsSleep = AppConfig.IsSleep
+	jd.SleepMillisecond = AppConfig.SleepMillisecond
 	buyTime, err := time.ParseInLocation(TimeFormat, AppConfig.BuyTime, time.Local)
 	if err != nil {
 		logs.Error("时间转换异常：", err)
@@ -636,7 +638,7 @@ func (jd *JdUtils) GetSeckillUrl() string {
 		if err != nil {
 			logs.Error("获取商品的抢购链接请求异常: ", err)
 			if jd.IsSleep {
-				time.Sleep(time.Duration(10) * time.Microsecond)
+				time.Sleep(time.Duration(jd.SleepMillisecond) * time.Millisecond)
 			}
 			continue
 		}
@@ -645,7 +647,7 @@ func (jd *JdUtils) GetSeckillUrl() string {
 			if err != nil {
 				logs.Error("获取商品的抢购链接,请求数据异常: ", err)
 				if jd.IsSleep {
-					time.Sleep(time.Duration(10) * time.Microsecond)
+					time.Sleep(time.Duration(jd.SleepMillisecond) * time.Millisecond)
 				}
 				continue
 			}
@@ -653,7 +655,7 @@ func (jd *JdUtils) GetSeckillUrl() string {
 			if err != nil {
 				logs.Error("解析Json响应数据失败: %s ", err)
 				if jd.IsSleep {
-					time.Sleep(time.Duration(10) * time.Microsecond)
+					time.Sleep(time.Duration(jd.SleepMillisecond) * time.Millisecond)
 				}
 				continue
 			}
@@ -661,7 +663,7 @@ func (jd *JdUtils) GetSeckillUrl() string {
 			if routeUrl == "" {
 				logs.Info("抢购链接获取失败，%s 不是抢购商品或抢购页面暂未刷新，稍后重试...", AppConfig.SkuId)
 				if jd.IsSleep {
-					time.Sleep(time.Duration(10) * time.Microsecond)
+					time.Sleep(time.Duration(jd.SleepMillisecond) * time.Millisecond)
 				}
 				continue
 			} else {
@@ -675,7 +677,7 @@ func (jd *JdUtils) GetSeckillUrl() string {
 			}
 		}
 		if jd.IsSleep {
-			time.Sleep(time.Duration(10) * time.Microsecond)
+			time.Sleep(time.Duration(jd.SleepMillisecond) * time.Millisecond)
 		}
 	}
 }
@@ -701,35 +703,29 @@ func (jd *JdUtils) RequestCheckOut() error {
 	}
 	logs.Info("访问抢购订单结算页面,StatusCode: %d", resp.StatusCode)
 	return nil
-
-	//if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusFound {
-	//	logs.Info("访问抢购订单结算页链接OK")
-	//	return nil
-	//} else {
-	//	err := fmt.Errorf("访问抢购订单结算页面,StatusCode: %d", resp.StatusCode)
-	//	logs.Error(err.Error())
-	//	return err
-	//}
 }
 
 func (jd *JdUtils) SubmitOrder() error {
+	submitUrl := fmt.Sprintf("https://marathon.jd.com/seckillnew/orderService/pc/submitOrder.action?skuId=%s", AppConfig.SkuId)
 	orderData, err := jd.GetOrderData()
 	if err != nil {
 		logs.Error("生成提交抢购订单所需参数异常：", err)
 		return err
 	}
-	for i := 0; i < 200; i++ {
-		go logs.Info("开始提交抢购订单【%d】次...", i)
-		url := "https://marathon.jd.com/seckillnew/orderService/pc/submitOrder.action"
-		skillUrl := fmt.Sprintf("https://marathon.jd.com/seckill/seckill.action?skuId=%s&num=%s&rid=%s", AppConfig.SkuId, strconv.FormatInt(AppConfig.CheckOutNumber, 10), strconv.FormatInt(time.Now().Unix()*1000, 10))
-		req := httplib.Post(url)
-		req.SetEnableCookie(true)
-		req.Param("skuId", AppConfig.SkuId)
-		req.JSONBody(orderData)
-		DefaultHeaders["User-Agent"] = AppConfig.UserAgent
-		jd.CustomHeader(req.GetRequest(), DefaultHeaders)
-		req.Header("Referer", skillUrl)
-		req.SetHost("marathon.jd.com")
+	logs.Info("orderData:", orderData)
+	skillUrl := fmt.Sprintf("https://marathon.jd.com/seckill/seckill.action?skuId=%s&num=%s&rid=%s", AppConfig.SkuId, strconv.FormatInt(AppConfig.CheckOutNumber, 10), strconv.FormatInt(time.Now().Unix(), 10))
+	req := httplib.Post(submitUrl)
+	req.SetEnableCookie(true)
+	for k, v := range orderData {
+		req.Param(k, v)
+	}
+	DefaultHeaders["User-Agent"] = AppConfig.UserAgent
+	jd.CustomHeader(req.GetRequest(), DefaultHeaders)
+	req.Header("Referer", skillUrl)
+	req.SetHost("marathon.jd.com")
+	req.JSONBody(orderData)
+	for i := 0; i < 10; i++ {
+		logs.Info("开始提交抢购订单【%d】次...", i)
 		resp, err := req.Response()
 		if err != nil {
 			continue
@@ -739,13 +735,16 @@ func (jd *JdUtils) SubmitOrder() error {
 			if err != nil {
 				logs.Error("获取抢购订单,请求数据异常: ", err)
 				if jd.IsSleep {
-					time.Sleep(time.Duration(10) * time.Microsecond)
+					time.Sleep(time.Duration(jd.SleepMillisecond) * time.Millisecond)
 				}
 				continue
 			}
 			Json, err := ToJSON(respMsg)
 			if err != nil {
 				logs.Error("解析Json响应数据失败: %s ", err)
+				if jd.IsSleep {
+					time.Sleep(time.Duration(jd.SleepMillisecond) * time.Millisecond)
+				}
 				continue
 			}
 			orderStatus := Json.Get("success").MustBool(false)
@@ -764,15 +763,17 @@ func (jd *JdUtils) SubmitOrder() error {
 				continue
 			}
 		} else {
-			err := fmt.Errorf("提交抢购订单失败,StatusCode: %d", resp.StatusCode)
-			logs.Error(err.Error())
+			logs.Error("提交抢购订单失败,StatusCode: %d", resp.StatusCode)
+			if jd.IsSleep {
+				time.Sleep(time.Duration(jd.SleepMillisecond) * time.Millisecond)
+			}
 			continue
 		}
 	}
 	return fmt.Errorf("抢购失败，即将重试...")
 }
 
-func (jd *JdUtils) GetOrderData() (map[string]interface{}, error) {
+func (jd *JdUtils) GetOrderData() (map[string]string, error) {
 	logs.Info("生成提交抢购订单所需参数...")
 	jsonOrder, err := jd.GetOrderInitData()
 	if err != nil {
@@ -784,36 +785,36 @@ func (jd *JdUtils) GetOrderData() (map[string]interface{}, error) {
 	//TODO 默认发票信息dict, 有可能不返回
 	invoiceInfo := jsonOrder.Get("invoiceInfo")
 	//TODO ToKen
-	token := jsonOrder.Get("token")
-	orderdata := make(map[string]interface{})
+	token := jsonOrder.Get("token").MustString()
+	orderdata := make(map[string]string)
 	orderdata["skuId"] = AppConfig.SkuId
-	orderdata["num"] = AppConfig.SubmitOrderNumber
-	orderdata["addressId"] = defaultAddress.Get("id")
+	orderdata["num"] = strconv.FormatInt(AppConfig.SubmitOrderNumber, 10)
+	orderdata["addressId"] = defaultAddress.Get("id").MustString()
 	orderdata["yuShou"] = "true"
 	orderdata["isModifyAddress"] = "false"
-	orderdata["name"] = defaultAddress.Get("name")
-	orderdata["provinceId"] = defaultAddress.Get("provinceId")
-	orderdata["cityId"] = defaultAddress.Get("cityId")
-	orderdata["countyId"] = defaultAddress.Get("countyId")
-	orderdata["townId"] = defaultAddress.Get("townId")
-	orderdata["addressDetail"] = defaultAddress.Get("addressDetail")
-	orderdata["mobile"] = defaultAddress.Get("mobile")
-	orderdata["mobileKey"] = defaultAddress.Get("mobileKey")
-	orderdata["email"] = defaultAddress.Get("email").MustString("")
+	orderdata["name"] = defaultAddress.Get("name").MustString()
+	orderdata["provinceId"] = defaultAddress.Get("provinceId").MustString()
+	orderdata["cityId"] = defaultAddress.Get("cityId").MustString()
+	orderdata["countyId"] = defaultAddress.Get("countyId").MustString()
+	orderdata["townId"] = defaultAddress.Get("townId").MustString()
+	orderdata["addressDetail"] = defaultAddress.Get("addressDetail").MustString()
+	orderdata["mobile"] = defaultAddress.Get("mobile").MustString()
+	orderdata["mobileKey"] = defaultAddress.Get("mobileKey").MustString()
+	orderdata["email"] = defaultAddress.Get("email").MustString()
 	orderdata["postCode"] = ""
-	orderdata["invoiceTitle"] = invoiceInfo.Get("invoiceTitle").MustInt(-1)
+	orderdata["invoiceTitle"] = invoiceInfo.Get("invoiceTitle").MustString("-1")
 	orderdata["invoiceCompanyName"] = ""
-	orderdata["invoiceContent"] = invoiceInfo.Get("invoiceContentType").MustInt(1)
+	orderdata["invoiceContent"] = invoiceInfo.Get("invoiceContentType").MustString("-1")
 	orderdata["invoiceTaxpayerNO"] = ""
 	orderdata["invoiceEmail"] = ""
 	orderdata["invoicePhone"] = invoiceInfo.Get("invoicePhone").MustString("")
 	orderdata["invoicePhoneKey"] = invoiceInfo.Get("invoicePhoneKey").MustString("")
 	orderdata["invoice"] = "true"
 	orderdata["password"] = ""
-	orderdata["codTimeType"] = 3
-	orderdata["paymentType"] = 4
+	orderdata["codTimeType"] = "3"
+	orderdata["paymentType"] = "4"
 	orderdata["areaCode"] = ""
-	orderdata["overseas"] = 0
+	orderdata["overseas"] = "0"
 	orderdata["phone"] = ""
 	orderdata["eid"] = AppConfig.Eid
 	orderdata["fp"] = AppConfig.Fp
@@ -838,7 +839,7 @@ func (jd *JdUtils) GetOrderInitData() (*simplejson.Json, error) {
 		if err != nil {
 			logs.Error("获取秒杀初始化信息请求异常: ", err)
 			if jd.IsSleep {
-				time.Sleep(time.Duration(10) * time.Microsecond)
+				time.Sleep(time.Duration(jd.SleepMillisecond) * time.Millisecond)
 			}
 			continue
 		}
@@ -847,7 +848,7 @@ func (jd *JdUtils) GetOrderInitData() (*simplejson.Json, error) {
 			if err != nil {
 				logs.Error("获取秒杀初始化信息,请求数据异常: ", err)
 				if jd.IsSleep {
-					time.Sleep(time.Duration(10) * time.Microsecond)
+					time.Sleep(time.Duration(jd.SleepMillisecond) * time.Millisecond)
 				}
 				continue
 			}
@@ -856,7 +857,7 @@ func (jd *JdUtils) GetOrderInitData() (*simplejson.Json, error) {
 			if err != nil {
 				logs.Error("解析Json响应数据失败: %s ", err)
 				if jd.IsSleep {
-					time.Sleep(time.Duration(10) * time.Microsecond)
+					time.Sleep(time.Duration(jd.SleepMillisecond) * time.Millisecond)
 				}
 				continue
 			}
@@ -865,7 +866,7 @@ func (jd *JdUtils) GetOrderInitData() (*simplejson.Json, error) {
 			err := fmt.Errorf("获取秒杀初始化信息失败,StatusCode: %d", resp.StatusCode)
 			logs.Error(err.Error())
 			if jd.IsSleep {
-				time.Sleep(time.Duration(10) * time.Microsecond)
+				time.Sleep(time.Duration(jd.SleepMillisecond) * time.Millisecond)
 			}
 			continue
 		}
@@ -954,14 +955,14 @@ func (jd *JdUtils) GetReservationUrlUrl() (string, error) {
 /*================================================TaskCorn=============================================================*/
 func (jd *JdUtils) TaskCorn() error {
 	logs.Info("正在等待到达设定时间:", jd.BuyTime.String())
-	if time.Now().Sub(jd.BuyTime).Minutes() > AppConfig.StopMinutes {
-		message := fmt.Sprintf("抢购时间以过【%f】分钟，自动停止...", AppConfig.StopMinutes)
+	if time.Now().Sub(jd.BuyTime).Seconds() > AppConfig.StopSeconds {
+		message := fmt.Sprintf("抢购时间以过【%f】秒，自动停止...", AppConfig.StopSeconds)
 		logs.Info(message)
 		return fmt.Errorf(message)
 	}
 	for {
 		if time.Now().Before(jd.BuyTime) || jd.GetJdTime().Before(jd.BuyTime) {
-			time.Sleep(time.Duration(10) * time.Nanosecond)
+			time.Sleep(time.Duration(jd.SleepMillisecond) * time.Nanosecond)
 		} else {
 			logs.Info("时间到达，开始执行……")
 			return nil
