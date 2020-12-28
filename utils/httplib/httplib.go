@@ -33,26 +33,26 @@ package httplib
 
 import (
 	"bytes"
-"compress/gzip"
-"crypto/tls"
-"encoding/json"
-"encoding/xml"
-"io"
-"io/ioutil"
-"log"
-"mime/multipart"
-"net"
-"net/http"
-"net/http/cookiejar"
-"net/http/httputil"
-"net/url"
-"os"
-"path"
-"strings"
-"sync"
-"time"
+	"compress/gzip"
+	"crypto/tls"
+	"encoding/json"
+	"encoding/xml"
+	"io"
+	"io/ioutil"
+	"log"
+	"mime/multipart"
+	"net"
+	"net/http"
+	"net/http/cookiejar"
+	"net/http/httputil"
+	"net/url"
+	"os"
+	"path"
+	"strings"
+	"sync"
+	"time"
 
-"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v2"
 )
 
 var defaultSetting = BeegoHTTPSettings{
@@ -66,8 +66,8 @@ var defaultSetting = BeegoHTTPSettings{
 var defaultCookieJar http.CookieJar
 var settingMutex sync.Mutex
 
-func SetCookieJar(cookieJar http.CookieJar){
-	defaultCookieJar =cookieJar
+func SetCookieJar(cookieJar http.CookieJar) {
+	defaultCookieJar = cookieJar
 }
 
 // createDefaultCookie creates a global cookiejar to store cookies.
@@ -91,6 +91,7 @@ func NewBeegoRequest(rawurl, method string) *BeegoHTTPRequest {
 	if err != nil {
 		log.Println("Httplib:", err)
 	}
+
 	req := http.Request{
 		URL:        u,
 		Method:     method,
@@ -327,6 +328,21 @@ func (b *BeegoHTTPRequest) Body(data interface{}) *BeegoHTTPRequest {
 		bf := bytes.NewBuffer(t)
 		b.req.Body = ioutil.NopCloser(bf)
 		b.req.ContentLength = int64(len(t))
+	case *bytes.Buffer:
+		b.req.ContentLength = int64(t.Len())
+		buf := t.Bytes()
+		b.req.GetBody = func() (io.ReadCloser, error) {
+			r := bytes.NewReader(buf)
+			return ioutil.NopCloser(r), nil
+		}
+	case *bytes.Reader:
+		b.req.ContentLength = int64(t.Len())
+		b.req.Body = ioutil.NopCloser(t)
+
+	case *strings.Reader:
+		b.req.ContentLength = int64(t.Len())
+		b.req.Body = ioutil.NopCloser(t)
+	default:
 	}
 	return b
 }
